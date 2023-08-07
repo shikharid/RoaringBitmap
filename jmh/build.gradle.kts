@@ -53,9 +53,11 @@ jmh {
     jmhVersion = "1.23"
     // tests depend on jmh, not the other way around
     isIncludeTests = false
-    warmupIterations = 5
-    iterations = 5
+    warmupIterations = 3
+    iterations = 3
     fork = 1
+    profilers = listOf("gc")
+    include = listOf("org.roaringbitmap.BitSetUtilBenchmark")
 }
 
 tasks.assemble {

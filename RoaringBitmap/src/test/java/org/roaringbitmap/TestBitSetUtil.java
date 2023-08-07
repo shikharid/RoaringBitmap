@@ -202,12 +202,12 @@ public class TestBitSetUtil {
   @Test
   public void testRandomByteBuffer() {
     final Random random = new Random(8934);
-    final int runs = 100;
-    final int maxNbits = 500000;
+    final int runs = 50000;
+    final int maxNbits = 100000;
     for (int i = 0;i < runs; ++i) {
       final int offset = random.nextInt(maxNbits) & Integer.MAX_VALUE;
       final BitSet bitset = randomBitset(random, offset, random.nextInt(maxNbits));
-      final RoaringBitmap bitmap = BitSetUtil.bitmapOf(toByteBuffer(bitset), false);
+      final RoaringBitmap bitmap = BitSetUtil.bitmapOfInPlace(toByteBuffer(bitset), false);
       assertEqualBitsets(bitset, bitmap);
     }
   }
@@ -216,7 +216,8 @@ public class TestBitSetUtil {
   public void testByteArrayWithOnly10000000thBitSet() {
     final BitSet bitset = new BitSet();
     bitset.set(10000000);
-    final RoaringBitmap bitmap = BitSetUtil.bitmapOf(toByteBuffer(bitset), false);
+    final RoaringBitmap bitmap = BitSetUtil.bitmapOfInPlace(toByteBuffer(bitset), false);
+    System.out.println(bitmap);
     assertEqualBitsets(bitset, bitmap);
   }
 

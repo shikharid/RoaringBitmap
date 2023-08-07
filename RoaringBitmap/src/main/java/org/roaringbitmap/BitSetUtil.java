@@ -3,6 +3,7 @@ package org.roaringbitmap;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.util.Arrays;
 import java.util.BitSet;
 
 
@@ -20,22 +21,6 @@ public class BitSetUtil {
   // 64-bit
   // word
 
-  private static ArrayContainer arrayContainerOf(final int from, final int to,
-      final int cardinality, final long[] words) {
-    // precondition: cardinality is max 4096
-    final char[] content = new char[cardinality];
-    int index = 0;
-
-    for (int i = from, socket = 0; i < to; ++i, socket += Long.SIZE) {
-      long word = words[i];
-      while (word != 0) {
-        long t = word & -word;
-        content[index++] = (char) (socket + Long.bitCount(t - 1));
-        word ^= t;
-      }
-    }
-    return new ArrayContainer(content);
-  }
 
 
   /**
@@ -69,6 +54,152 @@ public class BitSetUtil {
             BitSetUtil.containerOf(from, to, blockCardinality, words));
       }
     }
+    return ans;
+  }
+
+  private static ArrayContainer arrayContainerOf(final int from, final int to,
+                                                 final int cardinality, final long[] words) {
+    // precondition: cardinality is max 4096
+    final char[] content = new char[cardinality];
+    int index = 0;
+
+    for (int i = from, socket = 0; i < to; ++i, socket += Long.SIZE) {
+      long word = words[i];
+      while (word != 0) {
+        long t = word & -word;
+        content[index++] = (char) (socket + Long.bitCount(t - 1));
+        word ^= t;
+      }
+    }
+    return new ArrayContainer(content);
+  }
+
+  public static RoaringBitmap bitOf(ByteBuffer bb, boolean fastRank) {
+    bb = bb.slice().order(ByteOrder.LITTLE_ENDIAN);
+    final RoaringBitmap ans = fastRank ? new FastRankRoaringBitmap() : new RoaringBitmap();
+
+    // split buffer into blocks of long[], reuse a ThreadLocal array for blocks
+    final long[] words = WORD_BLOCK.get();
+    int containerIndex = 0;
+    int blockLength = 0, blockCardinality = 0, offset = 0;
+    long word;
+    boolean allDone = false;
+    while (!allDone) {
+      if (bb.remaining() >= 8) {
+        word = bb.getLong();
+      } else {
+        // Read remaining (less than 8) bytes
+        word = 0;
+        for (int remaining = bb.remaining(), j = 0; j < remaining; j++) {
+          word |= (bb.get() & 0xffL) << (8 * j);
+        }
+        allDone = true;
+      }
+
+      // Add read long to block
+      words[blockLength++] = word;
+      blockCardinality += Long.bitCount(word);
+
+      // When block is full, add block to bitmap
+      if (blockLength == BLOCK_LENGTH) {
+        // Each block becomes a single container, if any bit is set
+        addBlock(ans, words, containerIndex, blockLength,
+            blockCardinality, offset);
+        offset += (blockLength * Long.SIZE);
+        blockLength = blockCardinality = 0;
+        ++containerIndex;
+      }
+    }
+
+    // Add block to map, if any bit is set
+    addBlock(ans, words, containerIndex, blockLength, blockCardinality, offset);
+    return ans;
+  }
+
+  private static final ThreadLocal<char[]> WOR_BLOCK = ThreadLocal.withInitial(() ->
+      new char[ArrayContainer.DEFAULT_MAX_SIZE + 64]);
+  public static RoaringBitmap bitmapOfInPlace(ByteBuffer bb, boolean fastRank) {
+
+    bb = bb.slice().order(ByteOrder.LITTLE_ENDIAN);
+
+    final RoaringBitmap ans = fastRank ? new FastRankRoaringBitmap() : new RoaringBitmap();
+
+    BitmapContainer bitmapContainer = null;
+    long[] bitmapWords = null;
+    final char[] array = WOR_BLOCK.get();
+    Arrays.fill(array, (char) 0);
+    boolean allDone = false; // Start with an ArrayContainer always
+    int arrayOffset = 0, blockLength = 0, containerIdx = 0, offset = 0, cardinality = 0;
+    long word = 0;
+    while (!allDone) {
+
+      // Read a full long, if possible
+      if (bb.remaining() >= 8) {
+        word = bb.getLong();
+      } else {
+        // Or Read remaining (less than 8) bytes
+        word = 0;
+        for (int remaining = bb.remaining(), j = 0; j < remaining; j++) {
+          word |= (bb.get() & 0xffL) << (8 * j);
+        }
+        allDone = true;
+      }
+
+      if (bitmapContainer != null) {
+        // If we are one a bitmap container now, directly add word
+        bitmapWords[blockLength] = word;
+        cardinality += Long.bitCount(word);
+      } else {
+        while (word != 0) {
+          long t = word & -word;
+          array[cardinality++] = (char) (arrayOffset + Long.bitCount(t -  1));
+          word ^= t;
+        }
+        arrayOffset += Long.SIZE;
+        // See if we need to move to a BitmapContainer
+        if (cardinality >= ArrayContainer.DEFAULT_MAX_SIZE) {
+          bitmapContainer = new BitmapContainer();
+          for (int i = 0;i < cardinality; ++i) {
+            bitmapContainer.add(Util.lowbits(array[i]));
+          }
+          // Get backing long[] array
+          bitmapWords = bitmapContainer.bitmap;
+          cardinality = bitmapContainer.cardinality;
+          // Reset array container related things
+          Arrays.fill(array, (char) 0);
+          arrayOffset = 0;
+        }
+      }
+
+      blockLength++;
+      if (blockLength == BLOCK_LENGTH) { // Add container if full
+        if (bitmapContainer != null) {
+          if (cardinality > 0) {
+            bitmapContainer.cardinality = cardinality;
+            ans.highLowContainer.insertNewKeyValueAt(containerIdx++, Util.highbits(offset), bitmapContainer);
+          }
+          // Assume next container to be similar to whatever we used last
+          bitmapContainer = null;
+        } else {
+          if (cardinality > 0) {
+            ans.highLowContainer.insertNewKeyValueAt(containerIdx++, Util.highbits(offset), new ArrayContainer(Arrays.copyOf(array, cardinality)));
+          }
+          Arrays.fill(array, (char) 0);
+        }
+        offset += (blockLength * Long.SIZE);
+        blockLength = 0;
+        arrayOffset = 0;
+      }
+    }
+    // Write last block
+    if (blockLength > 0) {
+      if (bitmapContainer != null && bitmapContainer.cardinality > 0) {
+        ans.highLowContainer.insertNewKeyValueAt(containerIdx, Util.highbits(offset), bitmapContainer);
+      } else if (cardinality > 0) {
+        ans.highLowContainer.insertNewKeyValueAt(containerIdx, Util.highbits(offset), new ArrayContainer(Arrays.copyOf(array, cardinality)));
+      }
+    }
+    // Add block to map, if any bit is set
     return ans;
   }
 
@@ -131,13 +262,12 @@ public class BitSetUtil {
     return ans;
   }
 
-  private static int addBlock(RoaringBitmap ans, long[] words, int containerIndex, int blockLength,
+  private static void addBlock(RoaringBitmap ans, long[] words, int containerIndex, int blockLength,
     int blockCardinality, int offset) {
     if (blockCardinality > 0) {
-      ans.highLowContainer.insertNewKeyValueAt(containerIndex++, Util.highbits(offset),
+      ans.highLowContainer.insertNewKeyValueAt(containerIndex, Util.highbits(offset),
           BitSetUtil.containerOf(0, blockLength, blockCardinality, words));
     }
-    return containerIndex;
   }
 
   private static int cardinality(final int from, final int to, final long[] words) {
@@ -147,6 +277,8 @@ public class BitSetUtil {
     }
     return sum;
   }
+
+
 
 
   private static Container containerOf(final int from, final int to, final int blockCardinality,

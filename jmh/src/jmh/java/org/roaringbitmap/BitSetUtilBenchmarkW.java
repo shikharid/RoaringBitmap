@@ -11,26 +11,26 @@ import java.util.zip.GZIPInputStream;
 
 @BenchmarkMode(Mode.AverageTime)
 @OutputTimeUnit(TimeUnit.MICROSECONDS)
-public class BitSetUtilBenchmark {
+public class BitSetUtilBenchmarkW {
 
-  @Benchmark
-  public long BitSetToRoaringByAddingBitByBit(Data d) {
-    long bogus = 0;
-    for (int i = 0; i < d.bitsets.length; i++) {
-      bogus += bitmapTheNaiveWay(d.bitsets[i]).getCardinality();
-    }
-    return bogus;
-  }
-
-
-  @Benchmark
-  public long BitSetToRoaringUsingBitSetUtil(Data d) {
-    long bogus = 0;
-    for (int i = 0; i < d.bitsets.length; i++) {
-      bogus += BitSetUtil.bitmapOf(d.bitsets[i]).getCardinality();
-    }
-    return bogus;
-  }
+//  @Benchmark
+//  public long BitSetToRoaringByAddingBitByBit(Data d) {
+//    long bogus = 0;
+//    for (int i = 0; i < d.bitsets.length; i++) {
+//      bogus += bitmapTheNaiveWay(d.bitsets[i]).getCardinality();
+//    }
+//    return bogus;
+//  }
+//
+//
+//  @Benchmark
+//  public long BitSetToRoaringUsingBitSetUtil(Data d) {
+//    long bogus = 0;
+//    for (int i = 0; i < d.bitsets.length; i++) {
+//      bogus += BitSetUtil.bitmapOf(d.bitsets[i]).getCardinality();
+//    }
+//    return bogus;
+//  }
 
   /*
     Given an uncompressed bitset represented as a byte array (basically, as read on wire)
@@ -49,13 +49,12 @@ public class BitSetUtilBenchmark {
     return bogus;
   }
 
-
   @Benchmark
-  public long ByteArrayToBitsetToRoaring(Data d) {
+  public long ByteArrayLocalToRoaring(Data d) {
     long bogus = 0;
     for (int i = 0; i < d.bitsetsAsBytes.length; i++) {
-      BitSet bitset = BitSet.valueOf(d.bitsetsAsBytes[i]);
-      bogus += BitSetUtil.bitmapOf(bitset).getCardinality();
+      ByteBuffer bb = ByteBuffer.wrap(d.bitsetsAsBytes[i]);
+      bogus += BitSetUtil.bitOf(bb, false).getCardinality();
     }
     return bogus;
   }
@@ -120,7 +119,7 @@ public class BitSetUtilBenchmark {
            wordSize = 8192 represents 524288 bits (~64kb)
            wordSize = 131072 represents 8388608 bits (~8.3 million, ~1mb)
          */
-        final int minTotalWordSize = 64;
+        final int minTotalWordSize = 512;
         // Try to keep size of bitsets created below 1 gb
         final int bitsetCnt = Math.min((1024 * 1024 * 1024) / (minTotalWordSize * 8), dos.readInt());
 
